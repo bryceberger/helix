@@ -19,6 +19,28 @@ pub(super) fn get_diff_base(repo: &Path, file: &Path) -> Result<Vec<u8>> {
         .strip_prefix(repo)
         .context("failed to strip JJ repo root path from file")?;
 
+    let file_change_status = Command::new("jj")
+        .arg("--repository")
+        .arg(repo)
+        .args([
+            "--ignore-working-copy",
+            "diff",
+            "--color",
+            "never",
+            "--revision",
+            "@",
+            "--no-pager",
+            "--types",
+        ])
+        .arg(file_relative_to_root)
+        .output()?;
+    if !file_change_status.stderr.is_empty() {
+        anyhow::bail!("file is untracked");
+    }
+    if file_change_status.stdout.starts_with(b"-") {
+        return Ok(Vec::new());
+    }
+
     let tmpfile = tempfile::NamedTempFile::with_prefix("helix-jj-diff-")
         .context("could not create tempfile to save jj diff base")?;
     let tmppath = tmpfile.path();
