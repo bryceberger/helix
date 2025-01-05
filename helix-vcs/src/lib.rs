@@ -4,6 +4,8 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 
 #[cfg(feature = "git")]
 mod git;
+#[cfg(feature = "jj")]
+mod jj;
 
 mod diff;
 
@@ -72,7 +74,7 @@ impl DiffProviderRegistry {
 }
 
 /// Creation and update methods
-#[cfg_attr(not(feature = "git"), allow(unused))]
+#[cfg_attr(not(any(feature = "git", feature = "jj")), allow(unused))]
 impl DiffProviderRegistry {
     /// Register a provider (if any is found) for the given path.
     pub fn add(&mut self, path: &Path) {
@@ -93,6 +95,8 @@ impl DiffProviderRegistry {
         let result = match provider {
             #[cfg(feature = "git")]
             PossibleDiffProvider::Git => self.add_file_git(repo_path),
+            #[cfg(feature = "jj")]
+            PossibleDiffProvider::JJ => self.add_file_jj(repo_path),
         };
 
         match result {
@@ -117,7 +121,7 @@ impl DiffProviderRegistry {
                     );
                 }
             }
-            Err(err) => log::debug!(
+            Err(err) => log::error!(
                 "Failed to open repo at {} for {}: {:?}",
                 repo_path.display(),
                 path.display(),
@@ -190,6 +194,25 @@ impl DiffProviderRegistry {
             Err(err) => Err(err),
         }
     }
+
+    /// Add the jj repo to the known providers *if* it isn't already known.
+    #[cfg(feature = "git")]
+    fn add_file_jj(&mut self, repo_path: &Path) -> Result<(Arc<Path>, PossibleDiffProvider)> {
+        // Don't build a repo object if there is already one for that path.
+        if let Some((key, DiffProvider::JJ(_))) = self.providers.get_key_value(repo_path) {
+            return Ok((Arc::clone(key), PossibleDiffProvider::JJ));
+        }
+
+        match jj::open_repo(repo_path) {
+            Ok(repo) => {
+                let key = Arc::from(repo_path);
+                self.providers
+                    .insert(Arc::clone(&key), DiffProvider::JJ(repo));
+                Ok((key, PossibleDiffProvider::JJ))
+            }
+            Err(err) => Err(err),
+        }
+    }
 }
 
 /// A union type that includes all types that implement [DiffProvider]. We need this type to allow
@@ -200,16 +223,20 @@ impl DiffProviderRegistry {
 pub enum DiffProvider {
     #[cfg(feature = "git")]
     Git(gix::ThreadSafeRepository),
+    #[cfg(feature = "jj")]
+    JJ(jj::Repo),
 }
 
-#[cfg_attr(not(feature = "git"), allow(unused))]
+#[cfg_attr(not(any(feature = "git", feature = "jj")), allow(unused))]
 impl DiffProvider {
     fn get_diff_base(&self, file: &Path) -> Result<Vec<u8>> {
         // We need the */ref else we're matching on a reference and Rust considers all references
-        // inhabited. In our case
+        // inhabited.
         match *self {
             #[cfg(feature = "git")]
             Self::Git(ref repo) => git::get_diff_base(repo, file),
+            #[cfg(feature = "git")]
+            Self::JJ(ref repo) => jj::get_diff_base(repo, file).inspect_err(|e| log::error!("{e}")),
         }
     }
 
@@ -217,6 +244,8 @@ impl DiffProvider {
         match *self {
             #[cfg(feature = "git")]
             Self::Git(ref repo) => git::get_current_head_name(repo),
+            #[cfg(feature = "jj")]
+            Self::JJ(ref repo) => jj::get_current_head_name(repo),
         }
     }
 
@@ -224,6 +253,8 @@ impl DiffProvider {
         match *self {
             #[cfg(feature = "git")]
             Self::Git(ref repo) => git::for_each_changed_file(repo, f),
+            #[cfg(feature = "jj")]
+            Self::JJ(ref repo) => jj::for_each_changed_file(repo, f),
         }
     }
 }
@@ -233,6 +264,9 @@ pub enum PossibleDiffProvider {
     /// Possibly a git repo rooted at the stored path (i.e. `<path>/.git` exists)
     #[cfg(feature = "git")]
     Git,
+    /// Possibly a jj repo rooted at the stored path (i.e. `<path>/.jj` exists)
+    #[cfg(feature = "jj")]
+    JJ,
 }
 
 /// Does *possible* diff provider auto detection. Returns the 'root' of the workspace
@@ -240,20 +274,17 @@ pub enum PossibleDiffProvider {
 /// We say possible because this function doesn't open the actual repository to check if that's
 /// actually the case.
 fn get_possible_provider(path: &Path) -> Option<(&Path, PossibleDiffProvider)> {
-    if cfg!(feature = "git") {
-        #[cfg_attr(not(feature = "git"), allow(unused))]
-        fn check_path(path: &Path) -> Option<(&Path, PossibleDiffProvider)> {
-            #[cfg(feature = "git")]
-            if path.join(".git").try_exists().ok()? {
-                return Some((path, PossibleDiffProvider::Git));
-            }
+    let checks = &[
+        #[cfg(feature = "jj")]
+        (".jj", PossibleDiffProvider::JJ),
+        #[cfg(feature = "git")]
+        (".git", PossibleDiffProvider::Git),
+    ];
 
-            None
-        }
-
-        for parent in path.ancestors() {
-            if let Some(path_and_provider) = check_path(parent) {
-                return Some(path_and_provider);
+    for parent in path.ancestors() {
+        for (repo_indic, pdp) in checks {
+            if let Ok(true) = parent.join(repo_indic).try_exists() {
+                return Some((parent, *pdp));
             }
         }
     }
