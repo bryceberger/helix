@@ -119,8 +119,8 @@
         src = filteredSource;
         # disable fetching and building of tree-sitter grammars in the helix-term build.rs
         HELIX_DISABLE_AUTO_GRAMMAR_BUILD = "1";
-        buildInputs = [stdenv.cc.cc.lib];
-        nativeBuildInputs = [pkgs.installShellFiles];
+        buildInputs = [stdenv.cc.cc.lib pkgs.openssl.dev];
+        nativeBuildInputs = [pkgs.installShellFiles pkgs.pkg-config];
         # disable tests
         doCheck = false;
         meta.mainProgram = "hx";
@@ -169,6 +169,7 @@
       };
 
       devShells.default = pkgs.mkShell {
+        name = "helix";
         inputsFrom = builtins.attrValues self.checks.${system};
         nativeBuildInputs = with pkgs;
           [lld_13 cargo-flamegraph rust-analyzer]
