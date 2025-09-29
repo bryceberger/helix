@@ -2423,19 +2423,21 @@ fn run_shell_command(
 
 fn reset_diff_change(
     cx: &mut compositor::Context,
-    _args: Args,
+    args: Args,
     event: PromptEvent,
 ) -> anyhow::Result<()> {
     if event != PromptEvent::Validate {
         return Ok(());
     }
 
+    let diff_id = args.first().unwrap_or("git");
+
     let editor = &mut cx.editor;
     let scrolloff = editor.config().scrolloff;
 
     let (view, doc) = current!(editor);
-    let Some(handle) = doc.diff_handle() else {
-        bail!("Diff is not available in the current buffer")
+    let Some(handle) = doc.diff_handles().get(diff_id) else {
+        bail!("Diff {diff_id} is not available in the current buffer")
     };
 
     let diff = handle.load();
@@ -3585,7 +3587,7 @@ pub const TYPABLE_COMMAND_LIST: &[TypableCommand] = &[
         fun: reset_diff_change,
         completer: CommandCompleter::none(),
         signature: Signature {
-            positionals: (0, Some(0)),
+            positionals: (0, Some(1)),
             ..Signature::DEFAULT
         },
     },

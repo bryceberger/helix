@@ -101,7 +101,7 @@ impl Default for GutterConfig {
                 GutterType::Spacer,
                 GutterType::LineNumbers,
                 GutterType::Spacer,
-                GutterType::Diff,
+                GutterType::Diff("git".into()),
             ],
             line_numbers: GutterLineNumbersConfig::default(),
         }
@@ -308,6 +308,7 @@ pub struct Config {
     pub cursorcolumn: bool,
     #[serde(deserialize_with = "deserialize_gutter_seq_or_struct")]
     pub gutters: GutterConfig,
+    pub vcs: helix_vcs::Config,
     /// Middle click paste support. Defaults to true.
     pub middle_click_paste: bool,
     /// Automatic insertion of pairs to parentheses, brackets,
@@ -780,7 +781,7 @@ impl std::str::FromStr for LineNumber {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GutterType {
     /// Show diagnostics and other features like breakpoints
@@ -790,7 +791,7 @@ pub enum GutterType {
     /// Show one blank space
     Spacer,
     /// Highlight local changes
-    Diff,
+    Diff(String),
 }
 
 impl std::str::FromStr for GutterType {
@@ -801,7 +802,11 @@ impl std::str::FromStr for GutterType {
             "diagnostics" => Ok(Self::Diagnostics),
             "spacer" => Ok(Self::Spacer),
             "line-numbers" => Ok(Self::LineNumbers),
-            "diff" => Ok(Self::Diff),
+            "diff" => Ok(Self::Diff("git".into())),
+            s if s.starts_with("diff.") && s.len() > "diff.".len() => {
+                let id = s.strip_prefix("diff.").unwrap();
+                Ok(Self::Diff(id.into()))
+            }
             _ => anyhow::bail!(
                 "Gutter type can only be `diagnostics`, `spacer`, `line-numbers` or `diff`."
             ),
@@ -1068,6 +1073,7 @@ impl Default for Config {
             cursorline: false,
             cursorcolumn: false,
             gutters: GutterConfig::default(),
+            vcs: helix_vcs::Config::default(),
             middle_click_paste: true,
             auto_pairs: AutoPairConfig::default(),
             auto_completion: true,
@@ -1314,7 +1320,7 @@ impl Editor {
             theme: theme_loader.default(),
             language_servers,
             diagnostics: Diagnostics::new(),
-            diff_providers: DiffProviderRegistry::default(),
+            diff_providers: DiffProviderRegistry::from_config(&conf.vcs),
             debug_adapters: dap::registry::Registry::new(),
             breakpoints: HashMap::new(),
             syn_loader,
@@ -1891,9 +1897,7 @@ impl Editor {
                 Editor::doc_diagnostics(&self.language_servers, &self.diagnostics, &doc);
             doc.replace_diagnostics(diagnostics, &[], None);
 
-            if let Some(diff_base) = self.diff_providers.get_diff_base(&path) {
-                doc.set_diff_base(diff_base);
-            }
+            doc.set_diff_base(self.diff_providers.get_diff_base(&path));
             doc.set_version_control_head(self.diff_providers.get_current_head_name(&path));
 
             let id = self.new_document(doc);

@@ -24,7 +24,7 @@ use serde::de::{self, Deserialize, Deserializer};
 use serde::Serialize;
 use std::borrow::Cow;
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::future::Future;
 use std::io;
@@ -196,7 +196,7 @@ pub struct Document {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) language_servers: HashMap<LanguageServerName, Arc<Client>>,
 
-    diff_handle: Option<DiffHandle>,
+    diff_handles: BTreeMap<Arc<str>, DiffHandle>,
     version_control_head: Option<Arc<ArcSwap<Box<str>>>>,
 
     // when document was used for most-recent-used buffer picker
@@ -722,7 +722,7 @@ impl Document {
             last_saved_revision: 0,
             modified_since_accessed: false,
             language_servers: HashMap::new(),
-            diff_handle: None,
+            diff_handles: BTreeMap::new(),
             config,
             version_control_head: None,
             focused_at: std::time::Instant::now(),
@@ -1245,10 +1245,7 @@ impl Document {
         self.pickup_last_saved_time();
         self.detect_indent_and_line_ending();
 
-        match provider_registry.get_diff_base(&path) {
-            Some(diff_base) => self.set_diff_base(diff_base),
-            None => self.diff_handle = None,
-        }
+        self.set_diff_base(provider_registry.get_diff_base(&path));
 
         self.version_control_head = provider_registry.get_current_head_name(&path);
 
@@ -1454,7 +1451,7 @@ impl Document {
 
         // TODO: all of that should likely just be hooks
         // start computing the diff in parallel
-        if let Some(diff_handle) = &self.diff_handle {
+        for diff_handle in self.diff_handles.values() {
             diff_handle.update_document(self.text.clone(), false);
         }
 
@@ -1868,20 +1865,30 @@ impl Document {
         self.language_servers().any(|l| l.id() == id)
     }
 
-    pub fn diff_handle(&self) -> Option<&DiffHandle> {
-        self.diff_handle.as_ref()
+    pub fn diff_handles(&self) -> &BTreeMap<Arc<str>, DiffHandle> {
+        &self.diff_handles
     }
 
     /// Intialize/updates the differ for this document with a new base.
-    pub fn set_diff_base(&mut self, diff_base: Vec<u8>) {
-        if let Ok((diff_base, ..)) = from_reader(&mut diff_base.as_slice(), Some(self.encoding)) {
-            if let Some(differ) = &self.diff_handle {
-                differ.update_diff_base(diff_base);
-                return;
-            }
-            self.diff_handle = Some(DiffHandle::new(diff_base, self.text.clone()))
-        } else {
-            self.diff_handle = None;
+    pub fn set_diff_base(&mut self, mut diff_bases: HashMap<Arc<str>, Vec<u8>>) {
+        self.diff_handles.retain(|name, differ| {
+            let Some(diff_base) = diff_bases.remove(name) else {
+                return false;
+            };
+            let Ok((diff_base, ..)) = from_reader(&mut diff_base.as_slice(), Some(self.encoding))
+            else {
+                return false;
+            };
+            differ.update_diff_base(diff_base);
+            true
+        });
+        for (name, diff_base) in diff_bases {
+            let Ok((diff_base, ..)) = from_reader(&mut diff_base.as_slice(), Some(self.encoding))
+            else {
+                continue;
+            };
+            self.diff_handles
+                .insert(name, DiffHandle::new(diff_base, self.text.clone()));
         }
     }
 

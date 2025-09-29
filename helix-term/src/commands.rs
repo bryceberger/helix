@@ -4023,7 +4023,7 @@ fn goto_last_change(cx: &mut Context) {
 fn goto_first_change_impl(cx: &mut Context, reverse: bool) {
     let editor = &mut cx.editor;
     let (view, doc) = current!(editor);
-    if let Some(handle) = doc.diff_handle() {
+    if let Some((_, handle)) = doc.diff_handles().first_key_value() {
         let hunk = {
             let diff = handle.load();
             let idx = if reverse {
@@ -4053,7 +4053,7 @@ fn goto_next_change_impl(cx: &mut Context, direction: Direction) {
     let motion = move |editor: &mut Editor| {
         let (view, doc) = current!(editor);
         let doc_text = doc.text().slice(..);
-        let diff_handle = if let Some(diff_handle) = doc.diff_handle() {
+        let diff_handle = if let Some((_, diff_handle)) = doc.diff_handles().first_key_value() {
             diff_handle
         } else {
             editor.set_status("Diff is not available in current buffer");
@@ -6004,13 +6004,13 @@ fn select_textobject(cx: &mut Context, objtype: textobject::TextObject) {
                     )
                 };
 
-                if ch == 'g' && doc.diff_handle().is_none() {
+                if ch == 'g' && doc.diff_handles().is_empty() {
                     editor.set_status("Diff is not available in current buffer");
                     return;
                 }
 
                 let textobject_change = |range: Range| -> Range {
-                    let diff_handle = doc.diff_handle().unwrap();
+                    let (_, diff_handle) = doc.diff_handles().first_key_value().unwrap();
                     let diff = diff_handle.load();
                     let line = range.cursor_line(text);
                     let hunk_idx = if let Some(hunk_idx) = diff.hunk_at(line as u32, false) {

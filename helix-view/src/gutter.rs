@@ -31,7 +31,7 @@ impl GutterType {
             }
             GutterType::LineNumbers => line_numbers(editor, doc, view, theme, is_focused),
             GutterType::Spacer => padding(editor, doc, view, theme, is_focused),
-            GutterType::Diff => diff(editor, doc, view, theme, is_focused),
+            GutterType::Diff(n) => diff(editor, doc, view, theme, is_focused, n),
         }
     }
 
@@ -40,7 +40,7 @@ impl GutterType {
             GutterType::Diagnostics => 1,
             GutterType::LineNumbers => line_numbers_width(view, doc),
             GutterType::Spacer => 1,
-            GutterType::Diff => 1,
+            GutterType::Diff(_) => 1,
         }
     }
 }
@@ -93,11 +93,12 @@ pub fn diff<'doc>(
     _view: &View,
     theme: &Theme,
     _is_focused: bool,
+    diff_idx: usize,
 ) -> GutterFn<'doc> {
     let added = theme.get("diff.plus.gutter");
     let deleted = theme.get("diff.minus.gutter");
     let modified = theme.get("diff.delta.gutter");
-    if let Some(diff_handle) = doc.diff_handle() {
+    if let Some(diff_handle) = doc.diff_handles().get(diff_idx) {
         let hunks = diff_handle.load();
         let mut hunk_i = 0;
         let mut hunk = hunks.nth_hunk(hunk_i);
@@ -137,6 +138,65 @@ pub fn diff<'doc>(
     } else {
         Box::new(move |_, _, _, _| None)
     }
+}
+
+pub fn _diff_all<'doc>(
+    _editor: &'doc Editor,
+    doc: &'doc Document,
+    _view: &View,
+    theme: &Theme,
+    _is_focused: bool,
+) -> GutterFn<'doc> {
+    let added = theme.get("diff.plus.gutter");
+    let deleted = theme.get("diff.minus.gutter");
+    let modified = theme.get("diff.delta.gutter");
+    let none = Style::default();
+
+    let mut hunks: Vec<_> = doc
+        .diff_handles()
+        .iter()
+        .map(|diff_handle| {
+            let hunks = diff_handle.load();
+            let hunk_i = 0;
+            let hunk = hunks.nth_hunk(hunk_i);
+            (hunks, hunk_i, hunk)
+        })
+        .collect();
+    Box::new(
+        move |line: usize, _selected: bool, first_visual_line: bool, out: &mut String| {
+            for (hunks, hunk_i, hunk) in &mut hunks {
+                // truncating the line is fine here because we don't compute diffs
+                // for files with more lines than i32::MAX anyways
+                // we need to special case removals here
+                // these technically do not have a range of lines to highlight (`hunk.after.start == hunk.after.end`).
+                // However we still want to display these hunks correctly we must not yet skip to the next hunk here
+                while hunk.after.end < line as u32
+                    || !hunk.is_pure_removal() && line as u32 == hunk.after.end
+                {
+                    *hunk_i += 1;
+                    *hunk = hunks.nth_hunk(*hunk_i);
+                }
+
+                let (icon, _style) = if hunk.after.start > line as u32 {
+                    (" ", none)
+                } else if hunk.is_pure_insertion() {
+                    ("▍", added)
+                } else if hunk.is_pure_removal() {
+                    if !first_visual_line {
+                        (" ", none)
+                    } else {
+                        ("▔", deleted)
+                    }
+                } else {
+                    ("▍", modified)
+                };
+
+                write!(out, "{}", icon).unwrap();
+                // Some(style)
+            }
+            Some(none)
+        },
+    )
 }
 
 pub fn line_numbers<'doc>(
