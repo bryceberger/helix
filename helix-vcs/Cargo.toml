@@ -27,6 +27,7 @@ log = "0.4"
 
 [features]
 git = ["gix"]
+jj = []
 
 [dev-dependencies]
 tempfile.workspace = true

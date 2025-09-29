@@ -13,6 +13,8 @@ use std::{
 
 #[cfg(feature = "git")]
 mod git;
+#[cfg(feature = "jj")]
+mod jj;
 
 mod diff;
 
@@ -38,6 +40,22 @@ struct ProviderConfig {
 impl Default for Config {
     fn default() -> Self {
         let providers = HashMap::from([
+            #[cfg(feature = "jj")]
+            (
+                "jj-trunk".into(),
+                ProviderConfig {
+                    provider: DiffProviderRaw::Jj,
+                    args: HashMap::from([("revset".into(), "trunk() ~ @-".into())]),
+                },
+            ),
+            #[cfg(feature = "jj")]
+            (
+                "jj-head".into(),
+                ProviderConfig {
+                    provider: DiffProviderRaw::Jj,
+                    args: HashMap::from([("revset".into(), "@-".into())]),
+                },
+            ),
             #[cfg(feature = "git")]
             (
                 "git".into(),
@@ -107,7 +125,7 @@ impl DiffProviderRegistry {
             if self
                 .providers
                 .iter()
-                .find_map(|provider| provider.for_each_changed_file(&cwd, &f).ok())
+                .find_map(|(_name, provider)| provider.for_each_changed_file(&cwd, &f).ok())
                 .is_none()
             {
                 f(Err(anyhow!("no diff provider returns success")));
@@ -132,6 +150,8 @@ impl DiffProviderRegistry {
 enum DiffProviderRaw {
     #[cfg(feature = "git")]
     Git,
+    #[cfg(feature = "jj")]
+    Jj,
     #[default]
     None,
 }
@@ -142,6 +162,10 @@ enum DiffProviderRaw {
 enum DiffProvider {
     #[cfg(feature = "git")]
     Git,
+    #[cfg(feature = "jj")]
+    Jj {
+        revset: Arc<str>,
+    },
     None,
 }
 
@@ -150,6 +174,8 @@ impl DiffProvider {
         match self {
             #[cfg(feature = "git")]
             Self::Git => git::get_diff_base(file),
+            #[cfg(feature = "jj")]
+            Self::Jj { revset } => jj::get_diff_base(file, revset),
             Self::None => bail!("No diff support compiled in"),
         }
     }
@@ -158,6 +184,8 @@ impl DiffProvider {
         match self {
             #[cfg(feature = "git")]
             Self::Git => git::get_current_head_name(file),
+            #[cfg(feature = "jj")]
+            Self::Jj { .. } => bail!("no head name for jj"),
             Self::None => bail!("No diff support compiled in"),
         }
     }
@@ -170,6 +198,8 @@ impl DiffProvider {
         match self {
             #[cfg(feature = "git")]
             Self::Git => git::for_each_changed_file(cwd, f),
+            #[cfg(feature = "jj")]
+            Self::Jj { revset } => jj::for_each_changed_file(cwd, f, revset),
             Self::None => bail!("No diff support compiled in"),
         }
     }
@@ -177,6 +207,14 @@ impl DiffProvider {
     fn from_raw(provider: &ProviderConfig) -> Self {
         match provider.provider {
             DiffProviderRaw::Git => Self::Git,
+            DiffProviderRaw::Jj => Self::Jj {
+                revset: provider
+                    .args
+                    .get("revset")
+                    .map(|s| s.as_str())
+                    .unwrap_or("@-")
+                    .into(),
+            },
             DiffProviderRaw::None => Self::None,
         }
     }
